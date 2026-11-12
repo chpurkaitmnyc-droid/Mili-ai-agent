@@ -1,0 +1,26 @@
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Environment and sensitive credential files
+.env
+.env.*
+!.env.example
+
+# Audio files (TTS generated and voice inputs)
+*.wav
+*.ogg
+*.mp3
+audio_chunks/
+
+# Scratch & temporary test files
+payload.json
+
+# Operating System files
+Thumbs.db
+.DS_Store
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -1,0 +1,24 @@
+{
+  "name": "ai-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node ai-brain-loop.js",
+    "outbound": "node ai-brain-loop.js",
+    "scan": "node ai-brain-loop.js --scan",
+    "inbound": "node ai-brain-loop.js --inbound",
+    "stream": "node streaming-voice-agent.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google/genai": "^3.2.0",
+    "dotenv": "^18.0.10",
+    "openai": "^7.55.0",
+    "sarvamai": "^1.1.18"
+  }
+}

@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "name": "Raju",
+    "phone": "9876543210",
+    "dueAmount": 3500,
+    "dueDate": "2026-11-10",
+    "status": "promised_to_pay",
+    "callNotes": "[Sentiment: neutral] Customer requested additional time; negotiated for upcoming week payment. (Promised: 2026-11-19)"
+  },
+  {
+    "id": 2,
+    "name": "Subrata",
+    "phone": "9876543211",
+    "dueAmount": 1500,
+    "dueDate": "2026-11-08",
+    "status": "promised_to_pay",
+    "callNotes": "[positive] Customer promised to pay tomorrow. | Promised: 2026-11-13"
+  },
+  {
+    "id": 3,
+    "name": "Priya",
+    "phone": "9876543212",
+    "dueAmount": 7200,
+    "dueDate": "2026-11-05",
+    "status": "disputed",
+    "callNotes": "[Sentiment: neutral] Customer requested discount in Benglish; escalated to Chayan Sir."
+  },
+  {
+    "id": 4,
+    "name": "Amit",
+    "phone": "9876543213",
+    "dueAmount": 950,
+    "dueDate": "2026-11-20",
+    "status": "pending",
+    "callNotes": ""
+  }
+]
