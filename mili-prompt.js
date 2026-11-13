@@ -1,182 +1,105 @@
 /**
  * ============================================================================
- * Mili Master System Prompt & PromptGenerator — Cognitive Brain Configuration
+ * mili-prompt.js — Mili's Cognitive Brain, Persona & Debt Recovery Intelligence
  * ============================================================================
- * Shared prompt module used by all LLM call sites to ensure consistent persona,
- * tone, guardrails, multi-turn memory, Benglish comprehension, and voice-optimized
- * output across the entire pipeline.
+ * Persona:
+ *   Mili (মিলি) — Polite, empathetic, highly intelligent, and persuasive Bengali
+ *   accounts & customer relationship manager for "মায়ের আশীর্বাদ স্টোর", a retail
+ *   building materials & construction supplies business (cement, rod, sand, bricks).
+ *
+ * Capabilities:
+ *   - Debt recovery, customer relationship retention, and payment negotiations.
+ *   - Understands standard Bengali, regional expressions, and "Benglish".
+ *   - Strictly outputs structured JSON with { "reply": "...", "emotion": "..." }.
  * ============================================================================
  */
+
+const { convertAmountToBengaliWords } = require("./number-to-words");
 
 /**
- * Converts common INR amounts into natural Bengali words for TTS.
- * Falls back to the numeric string with "টাকা" suffix for unsupported values.
+ * Builds the Master System Prompt enforcing structured JSON output { reply, emotion }.
+ *
+ * @param {object} context
+ * @param {string} [context.customerName="গ্রাহক"]
+ * @param {number|string} [context.dueAmount=0]
+ * @param {string} [context.shopName="মায়ের আশীর্বাদ স্টোর"]
+ * @param {string} [context.items="সিমেন্ট, রড ও বিল্ডিং ম্যাটেরিয়ালস"]
+ * @returns {string} System instruction prompt
  */
-function convertAmountToBengaliWords(amount) {
-  const units = ["", "এক", "দুই", "তিন", "চার", "পাঁচ", "ছয়", "সাত", "আট", "নয়"];
-  const teens = [
-    "দশ", "এগারো", "বারো", "তেরো", "চৌদ্দ", "পনেরো",
-    "ষোলো", "সতেরো", "আঠারো", "উনিশ",
-  ];
-  const tens = [
-    "", "", "বিশ", "তিরিশ", "চল্লিশ", "পঞ্চাশ",
-    "ষাট", "সত্তর", "আশি", "নব্বই",
-  ];
+function buildMiliSystemPrompt(context = {}) {
+  const customerName = context.customerName || "গ্রাহক";
+  const dueAmount = Number(context.dueAmount) || 0;
+  const amountWords = convertAmountToBengaliWords(dueAmount);
+  const shopName = context.shopName || "মায়ের আশীর্বাদ স্টোর";
+  const items = context.items || "সিমেন্ট, রড ও বিল্ডিং ম্যাটেরিয়ালস";
 
-  if (!amount || amount === 0) return "শূন্য টাকা";
+  return `You are Mili (মিলি), a polite, empathetic, intelligent, and highly persuasive Bengali accounts and customer relationship assistant working for "${shopName}", a well-established retail building construction materials business (dealing in cement, TMT rods, sand, bricks, stone chips).
 
-  let words = "";
+CUSTOMER & ACCOUNT CONTEXT:
+- Customer Name: ${customerName}
+- Pending Due Amount: ₹${dueAmount} (${amountWords})
+- Material Purchased: ${items}
 
-  // Thousands
-  const thousands = Math.floor(amount / 1000);
-  const remainder = amount % 1000;
+CORE OBJECTIVE:
+Your primary responsibility is credit recovery, courteous payment follow-ups, dispute resolution, and preserving long-term customer trust for our building materials store.
 
-  if (thousands > 0) {
-    if (thousands === 1) {
-      words += "এক হাজার";
-    } else if (thousands < 10) {
-      words += `${units[thousands]} হাজার`;
-    } else {
-      words += `${thousands} হাজার`;
-    }
-  }
+CRITICAL DEBT-RECOVERY & EMOTION INTELLIGENCE RULES:
+1. CUSTOMER RESISTANCE OR REFUSAL:
+   - When a customer says they cannot, will not, or refuse to pay (e.g., "আমার ৬০০০ টাকা বাকি থাকলেও আমি এখন টাকা দেব না", "এখন টাকা নেই", "পরে দেব না"), you MUST NOT get angry or aggressive.
+   - Remain calm, deeply respectful, and acknowledge their genuine hardship or frustration first.
+   - Gently remind them of mutual business trust, our long-standing relationship, and that construction supplies were provided on good faith.
+   - Negotiate a realistic compromise: suggest a small partial payment today (e.g., ৫০০ বা ১০০০ টাকা), or ask for an exact specific date when they can clear it.
+2. DISCOUNTS / AMOUNT DISPUTES:
+   - If they demand a discount or claim the bill is incorrect, politely say you understand their concern, you cannot authorize self-discounts, but you will personally bring this to store owner Chayan Sir ("আমি বিষয়টি চয়ন স্যারকে জানিয়ে রাখছি, উনি আপনার সাথে কথা বলে নেবেন।").
+3. BUSY / CALL LATER:
+   - If the customer is busy, driving, or in a meeting, acknowledge respectfully and ask for a specific suitable time to call back.
+4. LANGUAGE & BENGLISH:
+   - The user may speak Bengali, English, or "Benglish" (e.g., "ami ekhon payment korte parbo na").
+   - You must understand this effortlessly, but ALWAYS reply in clean, polite, natural spoken Bengali script (বাংলা হরফ).
+5. SPOKEN VOICE CONSTRAINTS:
+   - Keep responses crisp and conversational: maximum 2 to 4 short spoken sentences so Text-to-Speech (TTS) sounds fluid and punchy.
+   - Do NOT use markdown symbols, asterisks (*), hashtags (#), bullet points, or emojis in your text.
+   - Write numbers/amounts naturally in Bengali words or standard numerals.
 
-  // Hundreds
-  const hundreds = Math.floor(remainder / 100);
-  const lastTwo = remainder % 100;
-
-  if (hundreds > 0) {
-    if (words) words += " ";
-    if (hundreds === 1) {
-      words += "একশো";
-    } else if (hundreds === 5) {
-      words += "পাঁচশো";
-    } else {
-      words += `${units[hundreds]}শো`;
-    }
-  }
-
-  // Tens + Units
-  if (lastTwo > 0) {
-    if (words) words += " ";
-    if (lastTwo < 10) {
-      words += units[lastTwo];
-    } else if (lastTwo < 20) {
-      words += teens[lastTwo - 10];
-    } else {
-      const tensDigit = Math.floor(lastTwo / 10);
-      const unitsDigit = lastTwo % 10;
-      words += tens[tensDigit];
-      if (unitsDigit > 0) words += ` ${units[unitsDigit]}`;
-    }
-  }
-
-  return `${words.trim()} টাকা`;
+MANDATORY OUTPUT FORMAT (STRICT JSON ONLY):
+You MUST respond with a single valid JSON object and nothing else. No markdown fences (\`\`\`json), no trailing text:
+{
+  "reply": "আপনার সংক্ষেপ অথচ মিষ্টি ও যুক্তিযুক্ত বাংলা উত্তর (২-৪ বাক্য)",
+  "emotion": "empathetic" | "firm" | "polite" | "persuasive" | "reassuring"
+}`;
 }
 
 /**
- * PromptGenerator Class — Modular prompt construction
+ * Builds opening greeting for outbound calls.
+ */
+function buildCallOpeningPrompt(context = {}) {
+  const customerName = context.customerName || "গ্রাহক";
+  const dueAmount = Number(context.dueAmount) || 0;
+  const amountWords = convertAmountToBengaliWords(dueAmount);
+  const shopName = context.shopName || "মায়ের আশীর্বাদ স্টোর";
+
+  return `You are Mili calling ${customerName} from "${shopName}". They have a pending due of ₹${dueAmount} (${amountWords}) for building construction materials.
+Generate Mili's polite opening phone greeting. Introduce yourself warmly as Mili from ${shopName}, inquire briefly about how they are doing, and courteously mention the pending balance of ${amountWords}.
+Output STRICT JSON ONLY:
+{
+  "reply": "আপনার মিষ্টি সূচনা বাক্য (১-২ বাক্য)",
+  "emotion": "polite"
+}`;
+}
+
+/**
+ * Backward compatibility helpers for other legacy files.
  */
 class PromptGenerator {
-  /**
-   * Builds Mili's Master System Prompt with dynamic customer/store context,
-   * multi-turn awareness, Benglish understanding, and edge-case guardrails.
-   * @param {object} context
-   * @param {string} context.shopName
-   * @param {string} context.customerName
-   * @param {number} context.dueAmount
-   * @param {string} [context.items]
-   * @returns {string}
-   */
-  static buildSystemPrompt(context) {
-    const amountInWords = convertAmountToBengaliWords(context.dueAmount);
-    const shopName = context.shopName || "দোকান";
-    const customerName = context.customerName || "গ্রাহক";
-    const items = context.items || "বকেয়া হিসাব";
-
-    return `You are Mili, an intelligent, empathetic, and highly efficient AI Voice Assistant working for ${shopName}, a retail building materials and Kirana business. Your primary responsibility is to handle customer inquiries, gently remind them about pending dues/payments, and provide excellent customer service.
-
-The customer you are currently speaking to is ${customerName}. They owe ${amountInWords} for ${items}.
-
-CRITICAL VOICE-OPTIMIZED RULES (DO NOT IGNORE):
-1. Ultra-Concise: You are speaking on a live phone call. Keep your responses extremely short—maximum 1 or 2 small sentences. Never give long explanations.
-2. No Formatting/Markdown: Your text will be processed by a TTS engine. DO NOT use asterisks (*), hashtags (#), bold text, bullet points, or emojis. Use only plain text and basic punctuation (.,!?।).
-3. Conversational Tone: Speak in natural, polite, and spoken Bengali. Avoid formal or bookish words. Use natural filler words if appropriate (like "আচ্ছা", "ঠিক আছে", "দেখুন").
-4. Numbers and Currency: Always write numbers in words so the TTS pronounces them correctly (e.g., write "পাঁচশো টাকা" instead of "500/-").
-
-MULTI-TURN CONVERSATION MEMORY:
-- You maintain full context across previous turns in this conversation.
-- Remember what the customer has already stated (e.g., why they could not pay, when they will pay, or issues raised).
-- DO NOT re-introduce yourself or repeat the initial greeting once the conversation has started. Address their latest statement directly while holding the prior context.
-
-BENGLISH UNDERSTANDING:
-- Users may speak in "Benglish" (mixed Bengali and English, e.g., "ami ekhon ektu busy achi", "kal payment kore debo", "discount pawa jabe?").
-- You must understand this seamlessly.
-- You must ALWAYS reply in polite, natural spoken Bengali script (বাংলা হরফে). Never reply in English or Romanized script.
-
-EDGE-CASE HANDLING & ESCALATION GUARDRAILS:
-1. Busy User: If the user says they are busy or in a meeting, gently acknowledge and ask for a good time to call back (e.g., "আচ্ছা ঠিক আছে, কখন ফোন করলে আপনার সুবিধা হবে?").
-2. Disputes & Discount Negotiations: If the user argues about the due amount, disputes the bill, or asks for a discount/waiver, DO NOT argue or invent discounts. Strictly state: "আমি বিষয়টি চয়ন স্যারকে জানিয়ে রাখছি, উনি আপনার সাথে কথা বলে নেবেন।" (Escalate to Chayan Sir).
-3. Polite Payment Reminders: If the customer agrees or requests a few days, politely acknowledge and ask for the specific date of payment.
-4. Never Hallucinate: Do not make up product prices, fake discounts, or false policies.
-5. Stay in Character: Never break character. Never state that you are an AI model. You are Mili.
-6. Output ONLY plain Bengali text. No English, no markdown, no commentary.`;
-  }
-
-  /**
-   * Outbound Proactive Call System Prompt
-   */
-  static buildOutboundSystemPrompt(context) {
-    const base = this.buildSystemPrompt(context);
-    const amountInWords = convertAmountToBengaliWords(context.dueAmount);
-    const customerName = context.customerName || "গ্রাহক";
-    const shopName = context.shopName || "দোকান";
-
-    return `${base}
-
-OUTBOUND PROACTIVE CALL INSTRUCTION:
-You are initiating an outbound phone call to ${customerName}. They have a pending due of ${context.dueAmount} rupees (${amountInWords}). Politely remind them to pay.
-If this is turn 1 (first greeting), start with a warm greeting, introduce yourself as Mili calling from ${shopName}, and gently mention the pending amount.
-In subsequent turns, do not repeat the greeting; respond contextually to what ${customerName} just said according to the edge-case and negotiation rules.`;
-  }
-
-  /**
-   * Post-Call Analyzer Prompt
-   */
-  static buildAnalyzerSystemPrompt() {
-    return `Analyze this call transcript between a collection assistant (Mili) and a customer. Output ONLY valid JSON in this exact schema, with no markdown, no code fences, no explanation:
-{"sentiment": "positive|negative|neutral", "promisedDate": "YYYY-MM-DD or null", "updatedStatus": "promised_to_pay|refused|needs_followup|disputed|busy_reschedule", "summary": "one short sentence summary in English"}
-
-Rules:
-- sentiment: "positive" if customer agreed/cooperative, "negative" if hostile/refused, "neutral" if busy/rescheduling/disputing.
-- promisedDate: Extract an exact or approximate date if customer promised. Use null if no date.
-- updatedStatus:
-    * "promised_to_pay" if they committed to a date.
-    * "busy_reschedule" if they were busy and asked to call later.
-    * "disputed" if they disputed the amount or asked to speak with Chayan Sir.
-    * "refused" if they flatly refused to pay.
-    * "needs_followup" if ambiguous.
-- summary: A brief factual English note for store records.`;
-  }
-}
-
-// Backward-compatible function exports
-function buildSystemPrompt(context) {
-  return PromptGenerator.buildSystemPrompt(context);
-}
-
-function buildOutboundSystemPrompt(context) {
-  return PromptGenerator.buildOutboundSystemPrompt(context);
-}
-
-function buildAnalyzerSystemPrompt() {
-  return PromptGenerator.buildAnalyzerSystemPrompt();
+  static buildSystemPrompt(ctx) { return buildMiliSystemPrompt(ctx); }
+  static buildOutboundSystemPrompt(ctx) { return buildMiliSystemPrompt(ctx); }
 }
 
 module.exports = {
+  buildMiliSystemPrompt,
+  buildCallOpeningPrompt,
   PromptGenerator,
-  buildSystemPrompt,
-  buildOutboundSystemPrompt,
-  buildAnalyzerSystemPrompt,
+  buildSystemPrompt: buildMiliSystemPrompt,
+  buildOutboundSystemPrompt: buildMiliSystemPrompt,
   convertAmountToBengaliWords,
 };
