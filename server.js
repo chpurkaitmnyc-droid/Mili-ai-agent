@@ -1,19 +1,20 @@
 /**
  * ============================================================================
- * server.js — Mili AI Voice & Chat REST API Server
+ * server.js — Mili AI Autonomous Agentic Backend & REST API
  * ============================================================================
- * Production-ready backend for "Mili" (মিলি), accounts & customer relationship
- * assistant for retail building construction materials businesses.
+ * Production-ready backend for "Mili" (মিলি), an autonomous agentic AI system
+ * built exclusively for Kirana stores, grocery wholesalers, and retail merchants
+ * to solve credit/khata management, billing tracking, invoicing analysis, and
+ * overdue payment recovery (বাকি আদায়).
  *
- * Endpoints:
- *   GET  /                  → Health check & endpoint catalogue
- *   GET  /api/status        → Live provider & database status
- *   GET  /api/customers     → Customer accounts list from database
- *   POST /api/chat          → Upgraded multi-turn chat with { reply, emotion, audio, audioFormat }
- *   POST /api/call/start    → Initiate outbound call with opening greeting & voice
- *   POST /api/call/respond  → Interactive ongoing call conversation turn
- *   POST /api/scan          → Trigger overdue debt collection scan
- *   POST /api/session/clear → Clear session history
+ * Integrated Services:
+ *   - Scope Gatekeeper (services/scopeGuard.js)
+ *   - Excel Automation Engine (services/excelService.js)
+ *   - Dynamic MCP Client Manager (services/mcpManager.js)
+ *   - Autonomous Follow-up Engine (services/automationEngine.js)
+ *   - Persistent Daily Cron Scheduler (services/schedulerService.js)
+ *   - Agentic ReAct Tool-Calling Loop (services/agentTools.js)
+ *   - Reusable Sarvam AI TTS (ttsService.js)
  * ============================================================================
  */
 
@@ -26,14 +27,22 @@ const crypto  = require("crypto");
 const OpenAI  = require("openai");
 
 const { generateSpeech, cleanTextForTTS } = require("./ttsService");
-const { buildMiliSystemPrompt, buildCallOpeningPrompt, convertAmountToBengaliWords } = require("./mili-prompt");
+const { buildMiliSystemPrompt, convertAmountToBengaliWords } = require("./mili-prompt");
 const { SessionManager } = require("./session-manager");
+
+// Services
+const excelService = require("./services/excelService");
+const { mcpManager } = require("./services/mcpManager");
+const automationEngine = require("./services/automationEngine");
+const { schedulerService } = require("./services/schedulerService");
+const { validateScope } = require("./services/scopeGuard");
+const { runAgenticLoop } = require("./services/agentTools");
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================================================
-// 1. CORS & Middleware (Phase 2, Requirement 5)
+// 1. CORS & Middleware
 // ============================================================================
 app.use(cors({
   origin: "*",
@@ -79,7 +88,7 @@ const nvidiaClient = process.env.NVIDIA_API_KEY
     })
   : null;
 
-// Chat session manager (keyed by sessionId)
+// Multi-turn chat session manager
 const sessionManager = new SessionManager();
 
 // Active phone call sessions store (keyed by callId)
@@ -97,24 +106,16 @@ function writeDB(data) {
 }
 
 // ============================================================================
-// 3. Cognitive Brain & Reasoning Engine (Phase 2, Requirement 2)
+// 3. Cognitive Brain & Reasoning Engine (for Calls & Standalone Chat)
 // ============================================================================
 
-/**
- * Intelligent Bengali debt recovery fallback engine.
- * Employs empathetic negotiation, dispute escalation to Chayan Sir, and reschedule handling.
- *
- * @param {string} userMessage 
- * @param {object} context 
- * @returns {{ reply: string, emotion: string }}
- */
 function analyzeAndGenerateHeuristic(userMessage, context = {}) {
   const customerName = context.customerName || "গ্রাহক";
   const dueAmount = Number(context.dueAmount) || 0;
   const amountWords = convertAmountToBengaliWords(dueAmount);
   const msg = (userMessage || "").toLowerCase();
 
-  // 1. Hard refusal or inability to pay (Core debt-recovery intelligence)
+  // 1. Refusal to pay
   if (
     msg.includes("টাকা দেব না") ||
     msg.includes("টাকা দিব না") ||
@@ -135,7 +136,7 @@ function analyzeAndGenerateHeuristic(userMessage, context = {}) {
     };
   }
 
-  // 2. Billing dispute or discount request -> Escalate strictly to Chayan Sir
+  // 2. Disputes / Discounts
   if (
     msg.includes("discount") ||
     msg.includes("ডিসকাউন্ট") ||
@@ -151,7 +152,7 @@ function analyzeAndGenerateHeuristic(userMessage, context = {}) {
     };
   }
 
-  // 3. Customer promises payment / commits to pay tomorrow or later
+  // 3. Promises to pay
   if (
     msg.includes("কাল") ||
     msg.includes("দেব") ||
@@ -167,14 +168,13 @@ function analyzeAndGenerateHeuristic(userMessage, context = {}) {
     };
   }
 
-  // 4. Customer is busy or asks to call back later
+  // 4. Busy
   if (
     msg.includes("busy") ||
     msg.includes("ব্যস্ত") ||
     msg.includes("পরে") ||
     msg.includes("গাড়ি") ||
-    msg.includes("মিটিং") ||
-    msg.includes("later")
+    msg.includes("মিটিং")
   ) {
     return {
       reply: `আচ্ছা ঠিক আছে ${customerName}বাবু, আপনি এখন কাজে ব্যস্ত আছেন বুঝতে পারছি। কখন ফোন করলে আপনার কথা বলতে সুবিধা হবে একটু জানিয়ে দিন?`,
@@ -182,13 +182,12 @@ function analyzeAndGenerateHeuristic(userMessage, context = {}) {
     };
   }
 
-  // 5. Greeting / Initial conversation opener
+  // 5. Greeting
   if (
     msg.includes("নমস্কার") ||
     msg.includes("হ্যালো") ||
     msg.includes("hi") ||
-    msg.includes("hello") ||
-    msg.includes("কে বলছেন")
+    msg.includes("hello")
   ) {
     return {
       reply: `নমস্কার ${customerName}বাবু! আমি মায়ের আশীর্বাদ স্টোর থেকে মিলি বলছি। আপনার বকেয়া ${amountWords}-এর হিসাব সংক্রান্ত বিষয়ে কথা বলতে ফোন করেছি।`,
@@ -196,64 +195,13 @@ function analyzeAndGenerateHeuristic(userMessage, context = {}) {
     };
   }
 
-  // Default empathetic response
   return {
     reply: `${customerName}বাবু, আমি আপনার কথা বুঝতে পারলাম। আমাদের বিল্ডিং ম্যাটেরিয়ালসের বকেয়া ${amountWords} পরিশোধের বিষয়ে আপনি কীভাবে এগোতে চাইছেন একটু জানালে ভালো হতো।`,
     emotion: "empathetic",
   };
 }
 
-/**
- * Parses raw LLM text into a safe { reply, emotion } object.
- *
- * @param {string} raw 
- * @param {object} context 
- * @param {string} userMessage 
- * @returns {{ reply: string, emotion: string }}
- */
-function parseLLMResponse(raw, context, userMessage) {
-  if (!raw || typeof raw !== "string") {
-    return analyzeAndGenerateHeuristic(userMessage, context);
-  }
-
-  try {
-    const clean = raw
-      .replace(/```json/gi, "")
-      .replace(/```/gi, "")
-      .trim();
-
-    const parsed = JSON.parse(clean);
-    if (parsed && parsed.reply) {
-      return {
-        reply: cleanTextForTTS(parsed.reply),
-        emotion: parsed.emotion || "empathetic",
-      };
-    }
-  } catch (_e) {
-    // If not JSON, check if it contains text
-    const textOnly = cleanTextForTTS(raw);
-    if (textOnly && textOnly.length > 5) {
-      return {
-        reply: textOnly,
-        emotion: "empathetic",
-      };
-    }
-  }
-
-  return analyzeAndGenerateHeuristic(userMessage, context);
-}
-
-/**
- * Generates an LLM response using DeepSeek (with timeout) or Gemini fallback,
- * backed by the deterministic heuristic engine.
- *
- * @param {Array} messages - Full conversation history
- * @param {object} context - Customer and store context
- * @param {string} userMessage - Latest user input
- * @returns {Promise<{ reply: string, emotion: string }>}
- */
 async function generateMiliResponse(messages, context, userMessage) {
-  // 1. Try DeepSeek (NVIDIA NIM)
   if (nvidiaClient) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 4000);
@@ -264,48 +212,36 @@ async function generateMiliResponse(messages, context, userMessage) {
           messages,
           temperature: 0.5,
           max_tokens: 220,
-          response_format: { type: "json_object" },
         },
         { signal: ctrl.signal }
       );
       clearTimeout(timer);
       const rawText = completion.choices[0]?.message?.content || "";
       if (rawText) {
-        return parseLLMResponse(rawText, context, userMessage);
+        try {
+          const parsed = JSON.parse(rawText.replace(/```json/gi, "").replace(/```/gi, "").trim());
+          if (parsed && parsed.reply) {
+            return {
+              reply: cleanTextForTTS(parsed.reply),
+              emotion: parsed.emotion || "empathetic",
+            };
+          }
+        } catch (_e) {
+          const textOnly = cleanTextForTTS(rawText);
+          if (textOnly && textOnly.length > 5) {
+            return { reply: textOnly, emotion: "empathetic" };
+          }
+        }
       }
     } catch (err) {
       clearTimeout(timer);
-      console.warn(`⚠️ [LLM] DeepSeek unavailable (${err.message}) — switching to fallback.`);
+      console.warn(`⚠️ [LLM] DeepSeek call issue (${err.message}). Using cognitive fallback.`);
     }
   }
 
-  // 2. Try Gemini fallback if configured
-  const geminiKey = process.env.GEMINI_API_KEY;
-  if (geminiKey && !geminiKey.includes("your_gemini") && geminiKey.trim()) {
-    try {
-      const { GoogleGenAI } = require("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: geminiKey });
-      const prompt = messages.map(m => `${m.role}: ${m.content}`).join("\n");
-      const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-      });
-      const text = result.text ? result.text.trim() : "";
-      if (text) {
-        return parseLLMResponse(text, context, userMessage);
-      }
-    } catch (e) {
-      console.warn(`⚠️ [LLM] Gemini fallback failed (${e.message}).`);
-    }
-  }
-
-  // 3. Guaranteed cognitive heuristic engine
   return analyzeAndGenerateHeuristic(userMessage, context);
 }
 
-// ============================================================================
-// 4. Session Helper
-// ============================================================================
 function getOrCreateChatSession(sessionId, context) {
   let session = sessionManager.getSession(sessionId);
   if (!session) {
@@ -317,24 +253,33 @@ function getOrCreateChatSession(sessionId, context) {
 }
 
 // ============================================================================
-// 5. REST Endpoints
+// 4. REST Endpoints
 // ============================================================================
 
-// ── GET / — Health & Catalogue ──────────────────────────────────────────────
+// ── GET / — System Health & Endpoint Catalogue ──────────────────────────────
 app.get("/", (_req, res) => {
   res.json({
-    service:   "Mili (মিলি) Bengali AI Voice & Chat System",
+    service:   "Mili (মিলি) Autonomous Agentic AI System for Kirana & Retail Stores",
+    niche:     "Billing Tracking, Khata Management, Overdue Payment Recovery (বাকি আদায়)",
     status:    "online",
-    version:   "3.0.0",
+    version:   "4.0.0",
     timestamp: new Date().toISOString(),
     endpoints: {
-      "POST /api/chat":          "Multi-turn chat with { reply, emotion, audio, audioFormat }",
-      "POST /api/call/start":    "Initiate outbound phone call session with greeting & voice",
-      "POST /api/call/respond":  "Ongoing outbound call conversation turn",
-      "GET  /api/status":        "Live system & database status",
-      "GET  /api/customers":     "Customer database records",
-      "POST /api/scan":          "Scan mock DB for overdue pending customers",
-      "POST /api/session/clear": "Clear a chat session history",
+      chat:           "POST /api/chat (Autonomous agentic tool-calling loop + Sarvam TTS)",
+      callStart:      "POST /api/call/start (Initiate phone call with voice)",
+      callRespond:    "POST /api/call/respond (Ongoing phone call turn)",
+      excelCustomers: "GET  /api/excel/customers (Customer ledger breakdown)",
+      excelFollowup:  "POST /api/excel/run-followup (Autonomous follow-up trigger)",
+      excelDownload:  "GET  /api/excel/download (Direct .xlsx ledger download)",
+      mcpServers:     "GET  /api/mcp/servers (Connected MCP server status & tools)",
+      mcpConnect:     "POST /api/mcp/connect (Connect external MCP server)",
+      mcpDisconnect:  "POST /api/mcp/disconnect (Disconnect an MCP server)",
+      schedulerStatus:"GET  /api/scheduler/status (Daily cron scheduler status)",
+      schedulerSet:   "POST /api/scheduler/set (Configure daily automated recovery)",
+      systemStatus:   "GET  /api/status (Provider & store health stats)",
+      mockCustomers:  "GET  /api/customers (Legacy customer JSON list)",
+      legacyScan:     "POST /api/scan (Legacy scan trigger)",
+      clearSession:   "POST /api/session/clear (Clear session memory)",
     },
   });
 });
@@ -343,23 +288,18 @@ app.get("/", (_req, res) => {
 app.get("/api/status", (_req, res) => {
   try {
     const db = readDB();
-    const summary = {
-      total:           db.length,
-      pending:         db.filter(c => c.status === "pending").length,
-      calling:         db.filter(c => c.status === "calling").length,
-      promised_to_pay: db.filter(c => c.status === "promised_to_pay").length,
-      disputed:        db.filter(c => c.status === "disputed").length,
-      refused:         db.filter(c => c.status === "refused").length,
-    };
     res.json({
-      status:           "online",
-      agent_name:       "Mili (মিলি)",
-      business:         "মায়ের আশীর্বাদ স্টোর (Building Materials & Kirana)",
-      tts_engine:       process.env.SARVAM_API_KEY ? "Sarvam AI (bulbul:v3 - roopa)" : "offline",
-      llm_engine:       nvidiaClient ? "DeepSeek (NVIDIA NIM) + Cognitive Fallback" : "Cognitive Heuristic Engine",
+      status:               "online",
+      agent_name:           "Mili (মিলি)",
+      niche:                "Kirana, Retail, Grocery Wholesale Credit Recovery & Billing",
+      tts_engine:           process.env.SARVAM_API_KEY ? "Sarvam AI (bulbul:v3 - roopa)" : "offline",
+      llm_engine:           nvidiaClient ? "DeepSeek (NVIDIA NIM) + Cognitive Agent Loop" : "Cognitive Heuristic Engine",
       active_chat_sessions: sessionManager.sessions.size,
       active_call_sessions: callSessions.size,
-      database_summary: summary,
+      scheduler:            schedulerService.getStatus(),
+      mcp_tools_active:     mcpManager.getAllTools().length,
+      connected_mcp_servers:mcpManager.getServersStatus().filter((s) => s.connected).length,
+      mock_db_customers:    db.length,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -376,28 +316,7 @@ app.get("/api/customers", (_req, res) => {
   }
 });
 
-// ── POST /api/chat — Upgraded Multi-Turn Chat (Phase 2, Requirement 3) ───────
-/**
- * Request:
- * {
- *   "message":      "User's input text",
- *   "customerName": "Raju",             [optional]
- *   "dueAmount":    6000,               [optional]
- *   "sessionId":    "session-101",      [optional, defaults to 'default-session']
- *   "audio":        true,               [optional, default true unless explicitly false]
- *   "tts":          true                [optional, synonym for audio]
- * }
- *
- * Response:
- * {
- *   "reply":       "...",
- *   "emotion":     "persuasive" | "empathetic" | "polite" | "reassuring" | "firm",
- *   "audio":       "<base64_string>" | null,
- *   "audioFormat": "wav" | null,
- *   "sessionId":   "session-101",
- *   "timestamp":   "2026-11-13T..."
- * }
- */
+// ── POST /api/chat — Upgraded Agentic Tool-Calling Loop (Phase 4) ───────────
 app.post("/api/chat", async (req, res) => {
   const {
     message,
@@ -415,7 +334,6 @@ app.post("/api/chat", async (req, res) => {
     });
   }
 
-  // Audio generation defaults to true unless explicitly passed as false
   const shouldGenerateAudio = (audio === false || tts === false) ? false : true;
 
   try {
@@ -423,25 +341,79 @@ app.post("/api/chat", async (req, res) => {
       customerName,
       dueAmount: Number(dueAmount) || 0,
       shopName: "মায়ের আশীর্বাদ স্টোর",
-      items: "সিমেন্ট, রড ও বিল্ডিং ম্যাটেরিয়ালস",
+      items: "মুদি, চাল, ডাল ও কনস্ট্রাকশন সামগ্রী",
     };
 
     const session = getOrCreateChatSession(sessionId, context);
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Step 0: Mandatory Scope Gatekeeper Check (Phase 4, Step 0)
+    // ──────────────────────────────────────────────────────────────────────────
+    const scopeCheck = await validateScope(message.trim(), session.chat_history);
+    if (!scopeCheck.allowed) {
+      console.log(`🛡️ [POST /api/chat] Gatekeeper blocked out-of-scope query for session: ${sessionId}`);
+      const rejectReply = scopeCheck.reply;
+
+      let rejectAudio = null;
+      let rejectFormat = null;
+      if (shouldGenerateAudio) {
+        const audioRes = await generateSpeech(rejectReply);
+        rejectAudio = audioRes.audio;
+        rejectFormat = audioRes.audioFormat;
+      }
+
+      return res.json({
+        reply: rejectReply,
+        emotion: "firm",
+        toolsUsed: [],
+        outOfScope: true,
+        audio: rejectAudio,
+        audioFormat: rejectFormat,
+        sessionId,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Add user message to session memory
     sessionManager.addMessage(sessionId, "user", message.trim());
 
-    // Generate response with emotion tag
-    console.time(`⏱️ [/api/chat] Latency (${sessionId})`);
-    const { reply, emotion } = await generateMiliResponse(session.chat_history, context, message.trim());
-    console.timeEnd(`⏱️ [/api/chat] Latency (${sessionId})`);
+    // ──────────────────────────────────────────────────────────────────────────
+    // Step 1: Agentic ReAct Tool-Calling Loop (Phase 4, Step 2 & 3)
+    // ──────────────────────────────────────────────────────────────────────────
+    console.time(`⏱️ [/api/chat] Agentic Loop (${sessionId})`);
 
-    // Store in history
+    const agentResult = await runAgenticLoop(
+      message.trim(),
+      session.chat_history,
+      context,
+      async (workingMessages) => {
+        if (!nvidiaClient) return null;
+        const comp = await nvidiaClient.chat.completions.create({
+          model: "deepseek-ai/deepseek-v4.1-flash",
+          messages: workingMessages,
+          temperature: 0.4,
+          max_tokens: 250,
+        });
+        return comp.choices[0]?.message?.content || "";
+      }
+    );
+
+    console.timeEnd(`⏱️ [/api/chat] Agentic Loop (${sessionId})`);
+
+    const reply = agentResult.reply;
+    const emotion = agentResult.emotion || "empathetic";
+    const toolsUsed = agentResult.toolsUsed || [];
+
+    // Save Mili's answer to session memory
     sessionManager.addMessage(sessionId, "assistant", reply);
 
-    // Generate Sarvam AI TTS audio
+    // ──────────────────────────────────────────────────────────────────────────
+    // Step 2: Sarvam AI Voice Synthesis
+    // ──────────────────────────────────────────────────────────────────────────
     let audioBase64 = null;
     let audioFormat = null;
     if (shouldGenerateAudio) {
-      console.log(`🔊 [/api/chat] Generating Sarvam TTS for: "${reply.slice(0, 50)}..."`);
+      console.log(`🔊 [/api/chat] Generating Sarvam TTS for reply (${reply.length} chars)...`);
       const ttsResult = await generateSpeech(reply);
       audioBase64 = ttsResult.audio;
       audioFormat = ttsResult.audioFormat;
@@ -450,43 +422,23 @@ app.post("/api/chat", async (req, res) => {
     res.json({
       reply,
       emotion,
+      toolsUsed,
+      outOfScope: false,
       audio: audioBase64,
       audioFormat,
       sessionId,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
-    console.error("❌ [/api/chat] Handler error:", err.message);
+    console.error("❌ [/api/chat] Handler Error:", err.message);
     res.status(500).json({
-      error: "Error processing chat message",
+      error: "Error processing chat query",
       details: err.message,
     });
   }
 });
 
-// ── POST /api/call/start — Initiate Outbound Call (Phase 2, Requirement 4) ───
-/**
- * Request:
- * {
- *   "customerName": "সুব্রত",
- *   "dueAmount":    1500,
- *   "phone":        "9876543210", [optional]
- *   "audio":        true,         [optional, default true]
- *   "tts":          true          [optional, default true]
- * }
- *
- * Response:
- * {
- *   "callId":       "call_1731478...",
- *   "status":       "connected",
- *   "customerName": "সুব্রত",
- *   "dueAmount":    1500,
- *   "reply":        "নমস্কার সুব্রতবাবু...",
- *   "emotion":      "polite",
- *   "audio":        "<base64_string>",
- *   "audioFormat":  "wav"
- * }
- */
+// ── POST /api/call/start — Outbound Call Initiation ─────────────────────────
 app.post("/api/call/start", async (req, res) => {
   const {
     customerName = "গ্রাহক",
@@ -507,14 +459,12 @@ app.post("/api/call/start", async (req, res) => {
     dueAmount: numDue,
     phone,
     shopName: "মায়ের আশীর্বাদ স্টোর",
-    items: "বিল্ডিং ম্যাটেরিয়ালস ও সিমেন্ট",
+    items: "দোকানের বাকি ও বাকির হিসাব",
   };
 
-  // Generate opening phone greeting
   const greetingText = `নমস্কার ${customerName}বাবু, আমি মায়ের আশীর্বাদ স্টোর থেকে মিলি বলছি। কেমন আছেন? আপনার স্টোরের বকেয়া ${amountWords}-এর বিষয়ে একটু কথা বলতে ফোন করেছিলাম।`;
   const emotion = "polite";
 
-  // Initialize call session in callSessions Map
   const systemPrompt = buildMiliSystemPrompt(context);
   const callHistory = [
     { role: "system", content: systemPrompt },
@@ -532,7 +482,6 @@ app.post("/api/call/start", async (req, res) => {
 
   console.log(`📞 [Call Started] CallId: ${callId} | Customer: ${customerName} | Due: ₹${numDue}`);
 
-  // Generate voice audio for call start
   let audioBase64 = null;
   let audioFormat = null;
   if (shouldGenerateAudio) {
@@ -553,27 +502,7 @@ app.post("/api/call/start", async (req, res) => {
   });
 });
 
-// ── POST /api/call/respond — Interactive Call Turn (Phase 2, Requirement 4) ──
-/**
- * Request:
- * {
- *   "callId":       "call_1731478...", [optional]
- *   "message":      "User's spoken response",
- *   "customerName": "সুব্রত",          [optional fallback]
- *   "dueAmount":    1500,              [optional fallback]
- *   "audio":        true,              [optional, default true]
- *   "tts":          true               [optional, default true]
- * }
- *
- * Response:
- * {
- *   "callId":      "call_...",
- *   "reply":       "...",
- *   "emotion":     "...",
- *   "audio":       "<base64_string>",
- *   "audioFormat": "wav"
- * }
- */
+// ── POST /api/call/respond — Interactive Ongoing Call Turn ──────────────────
 app.post("/api/call/respond", async (req, res) => {
   const {
     callId,
@@ -593,7 +522,6 @@ app.post("/api/call/respond", async (req, res) => {
 
   const shouldGenerateAudio = (audio === false || tts === false) ? false : true;
 
-  // Retrieve active call or create a fallback call context
   let callSession = callId ? callSessions.get(callId) : null;
   let activeCallId = callId;
 
@@ -603,7 +531,7 @@ app.post("/api/call/respond", async (req, res) => {
       customerName,
       dueAmount: Number(dueAmount) || 0,
       shopName: "মায়ের আশীর্বাদ স্টোর",
-      items: "বিল্ডিং ম্যাটেরিয়ালস",
+      items: "দোকানের বাকি হিসাব",
     };
     callSession = {
       callId: activeCallId,
@@ -621,7 +549,7 @@ app.post("/api/call/respond", async (req, res) => {
     customerName: callSession.customerName || customerName,
     dueAmount: Number(callSession.dueAmount) || Number(dueAmount) || 0,
     shopName: "মায়ের আশীর্বাদ স্টোর",
-    items: "বিল্ডিং ম্যাটেরিয়ালস",
+    items: "দোকানের বাকি হিসাব",
   };
 
   callSession.history.push({ role: "user", content: message.trim() });
@@ -632,11 +560,9 @@ app.post("/api/call/respond", async (req, res) => {
 
   callSession.history.push({ role: "assistant", content: reply });
 
-  // Generate voice audio for phone turn
   let audioBase64 = null;
   let audioFormat = null;
   if (shouldGenerateAudio) {
-    console.log(`🔊 [/api/call/respond] Generating Sarvam TTS for: "${reply.slice(0, 50)}..."`);
     const ttsRes = await generateSpeech(reply);
     audioBase64 = ttsRes.audio;
     audioFormat = ttsRes.audioFormat;
@@ -651,12 +577,151 @@ app.post("/api/call/respond", async (req, res) => {
   });
 });
 
-// ── POST /api/scan — Overdue Scanner ────────────────────────────────────────
+// ============================================================================
+// 5. PHASE 5: NEW API ROUTES
+// ============================================================================
+
+// ── GET /api/excel/customers — Analyzed Customer Rows & Stats ───────────────
+app.get("/api/excel/customers", async (_req, res) => {
+  try {
+    const analysis = await excelService.analyzeCustomers();
+    res.json({
+      success: true,
+      totalCustomers: analysis.totalCustomers,
+      overdueCount: analysis.overdueCount,
+      totalOverdueAmount: analysis.totalOverdueAmount,
+      totalOverdueAmountWords: convertAmountToBengaliWords(analysis.totalOverdueAmount),
+      overdueCustomers: analysis.overdueCustomers,
+      allCustomers: analysis.allCustomers,
+    });
+  } catch (err) {
+    console.error("❌ [/api/excel/customers] Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/excel/run-followup — Manual Overdue Follow-up Trigger ──────────
+app.post("/api/excel/run-followup", async (req, res) => {
+  try {
+    const dryRun = Boolean(req.body.dryRun);
+    const summary = await automationEngine.runOverdueFollowupWorkflow({ dryRun });
+    res.json({
+      success: true,
+      summary,
+    });
+  } catch (err) {
+    console.error("❌ [/api/excel/run-followup] Error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/excel/download — Direct Download of customers.xlsx ─────────────
+app.get("/api/excel/download", async (_req, res) => {
+  try {
+    await excelService.ensureCustomersExcel();
+    if (!fs.existsSync(excelService.CUSTOMERS_FILE)) {
+      return res.status(404).json({ error: "customers.xlsx not found" });
+    }
+    res.download(excelService.CUSTOMERS_FILE, "customers.xlsx");
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/mcp/servers — List Configured MCP Servers & Tools ──────────────
+app.get("/api/mcp/servers", (_req, res) => {
+  try {
+    const servers = mcpManager.getServersStatus();
+    const allTools = mcpManager.getAllTools();
+    res.json({
+      success: true,
+      serversCount: servers.length,
+      connectedCount: servers.filter((s) => s.connected).length,
+      toolsCount: allTools.length,
+      servers,
+      tools: allTools,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/mcp/connect — Connect External MCP Server ──────────────────────
+app.post("/api/mcp/connect", async (req, res) => {
+  const { name, command, args, env, url } = req.body;
+  if (!name || (!command && !url)) {
+    return res.status(400).json({
+      error: "Missing parameters. Required: { name, command (for stdio) OR url (for SSE) }",
+    });
+  }
+
+  try {
+    const result = await mcpManager.connectServer(name, { command, args, env, url });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/mcp/disconnect — Disconnect MCP Server ────────────────────────
+app.post("/api/mcp/disconnect", async (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: "Missing 'name' in request body." });
+
+  try {
+    const result = await mcpManager.disconnectServer(name);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/scheduler/status — Daily Cron Scheduler Status & Logs ──────────
+app.get("/api/scheduler/status", (_req, res) => {
+  try {
+    const status = schedulerService.getStatus();
+    let logs = [];
+    if (fs.existsSync(automationEngine.LOGS_FILE)) {
+      logs = JSON.parse(fs.readFileSync(automationEngine.LOGS_FILE, "utf-8") || "[]");
+    }
+    res.json({
+      success: true,
+      scheduler: status,
+      recentLogsCount: logs.length,
+      recentLogs: logs.slice(0, 5),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/scheduler/set — Configure Daily Cron Schedule ─────────────────
+app.post("/api/scheduler/set", (req, res) => {
+  const { hour, minute, enabled = true } = req.body;
+  if (hour === undefined || minute === undefined) {
+    return res.status(400).json({
+      error: "Missing parameters. Required: { hour (0-23), minute (0-59), enabled (optional boolean) }",
+    });
+  }
+
+  try {
+    const updatedConfig = schedulerService.setDailySchedule(hour, minute, enabled);
+    res.json({
+      success: true,
+      scheduler: updatedConfig,
+      message: `Daily Kirana follow-up schedule set to ${updatedConfig.timeLabel} (${updatedConfig.cronExpression}) [Active: ${updatedConfig.enabled}]`,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/scan — Legacy Database Scanner ────────────────────────────────
 app.post("/api/scan", (_req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
     const db = readDB();
-    const overdue = db.find(c => c.status === "pending" && c.dueDate <= today);
+    const overdue = db.find((c) => c.status === "pending" && c.dueDate <= today);
 
     if (!overdue) {
       return res.json({ found: false, message: "No overdue pending customers found in database." });
@@ -675,12 +740,8 @@ app.post("/api/scan", (_req, res) => {
 // ── POST /api/session/clear — Clear Session History ─────────────────────────
 app.post("/api/session/clear", (req, res) => {
   const { sessionId, callId } = req.body;
-  if (sessionId) {
-    sessionManager.endSession(sessionId);
-  }
-  if (callId) {
-    callSessions.delete(callId);
-  }
+  if (sessionId) sessionManager.endSession(sessionId);
+  if (callId) callSessions.delete(callId);
   res.json({ success: true, message: "Session / call history cleared." });
 });
 
@@ -690,16 +751,6 @@ app.use((req, res) => {
     error: "Route not found",
     path: req.path,
     method: req.method,
-    available_endpoints: [
-      "GET  /",
-      "GET  /api/status",
-      "GET  /api/customers",
-      "POST /api/chat",
-      "POST /api/call/start",
-      "POST /api/call/respond",
-      "POST /api/scan",
-      "POST /api/session/clear",
-    ],
   });
 });
 
@@ -710,20 +761,32 @@ app.use((err, _req, res, _next) => {
 });
 
 // ============================================================================
-// 6. Server Launch
+// 6. Server Launch & Background Task Initializer
 // ============================================================================
 if (require.main === module) {
-  app.listen(PORT, () => {
+  app.listen(PORT, async () => {
     console.log("=================================================================");
-    console.log("   🎙️  Mili AI Voice & Chat Systems Server — ONLINE");
+    console.log("   🎙️  Mili AI Autonomous Agentic Backend Server — ONLINE");
     console.log("=================================================================");
-    console.log(`   Port:        ${PORT}`);
-    console.log(`   Local URL:   http://localhost:${PORT}`);
-    console.log(`   Health:      http://localhost:${PORT}/api/status`);
-    console.log(`   Chat:        POST http://localhost:${PORT}/api/chat`);
-    console.log(`   Call Start:  POST http://localhost:${PORT}/api/call/start`);
-    console.log(`   Call Turn:   POST http://localhost:${PORT}/api/call/respond`);
+    console.log(`   Port:            ${PORT}`);
+    console.log(`   Local URL:       http://localhost:${PORT}`);
+    console.log(`   Health:          http://localhost:${PORT}/api/status`);
+    console.log(`   Agent Chat:      POST http://localhost:${PORT}/api/chat`);
+    console.log(`   Call Start:      POST http://localhost:${PORT}/api/call/start`);
+    console.log(`   Excel Customers: GET  http://localhost:${PORT}/api/excel/customers`);
+    console.log(`   Scheduler:       GET  http://localhost:${PORT}/api/scheduler/status`);
     console.log("=================================================================");
+
+    // Auto-seed and check Excel
+    await excelService.ensureCustomersExcel();
+
+    // Auto-restore persisted scheduler
+    schedulerService.initOnBoot();
+
+    // Auto-connect persisted MCP servers in background
+    mcpManager.autoConnectPersisted().catch((e) => {
+      console.warn("⚠️ [Server] MCP auto-connect:", e.message);
+    });
   });
 }
 
